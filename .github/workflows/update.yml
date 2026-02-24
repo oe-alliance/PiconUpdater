@@ -1,0 +1,65 @@
+name: Update Picons
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout eigenes Repo
+        uses: actions/checkout@v4
+
+      - name: Install Tools
+        run: sudo apt-get update && sudo apt-get install -y jq xz-utils
+
+      - name: Get latest release tag
+        id: release
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/picons/picons/releases/latest | jq -r .tag_name)
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Download Release Archive
+        run: |
+          TAG=${{ steps.release.outputs.tag }}
+          FILE="utf8snp-full.220x132-190x102.light.on.transparent_${TAG}.symlink.tar.xz"
+          URL="https://github.com/picons/picons/releases/download/${TAG}/${FILE}"
+
+          echo "Downloading $URL"
+          curl -L -o archive.tar.xz "$URL"
+
+      - name: Extract archive
+        run: |
+          mkdir extracted
+          tar -xJf archive.tar.xz -C extracted
+
+      - name: Resolve symlinks and copy real files
+        run: |
+          mkdir -p picon_all
+
+          find extracted -type l | while read link; do
+            target=$(readlink -f "$link")
+            name=$(basename "$link")
+
+            if [ -f "$target" ]; then
+              if [ ! -f "picon_all/$name" ] || [ "$target" -nt "picon_all/$name" ]; then
+                cp "$target" "picon_all/$name"
+              fi
+            fi
+          done
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add picon_all
+          if ! git diff --cached --quiet; then
+            git commit -m "Update picons from upstream release"
+            git push
+          else
+            echo "No changes"
+          fi
