@@ -1,0 +1,56 @@
+name: Download & Verify Release Archive
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/download-verify-workflow
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y jq xz-utils file
+
+      - name: Get latest release tag
+        id: release
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/picons/picons/releases/latest | jq -r .tag_name)
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Download release asset (resolve via API)
+        run: |
+          set -euo pipefail
+          TAG=${{ steps.release.outputs.tag }}
+          echo "Release tag: $TAG"
+
+          # Find matching asset by name pattern
+          ASSET_URL=$(curl -s "https://api.github.com/repos/picons/picons/releases/tags/${TAG}" \
+            | jq -r '.assets[].browser_download_url | select(test("utf8snp-full.*symlink\\.tar\\.xz"))' \
+            | head -n1)
+
+          if [ -z "$ASSET_URL" ]; then
+            echo "ERROR: Could not find matching asset for tag $TAG. Available assets:"
+            curl -s "https://api.github.com/repos/picons/picons/releases/tags/${TAG}" | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          echo "Downloading $ASSET_URL"
+          curl -L --fail -o archive.tar.xz "$ASSET_URL"
+
+          echo "Downloaded file size: $(stat -c%s archive.tar.xz || true) bytes"
+          echo "File magic:"
+          file archive.tar.xz || true
+          echo "First bytes (for debugging):"
+          head -c 256 archive.tar.xz | hexdump -C || true
+
+      - name: Attempt extract (reproduce the original tar/xz error)
+        run: |
+          set -euo pipefail
+          mkdir -p extracted
+          echo "Attempting extraction (tar -xJf) - this will reproduce the xz/tar failure if the file is not a valid xz archive"
+          tar -xJf archive.tar.xz -C extracted
